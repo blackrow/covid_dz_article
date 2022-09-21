@@ -1,0 +1,515 @@
+---
+title: "Article Covid"
+author: "Dr. ASRI"
+date: "2022-07-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R packages
+
+```{r}
+library(sp)
+library(spdep)
+library(sf)
+library(tmap)
+library(readxl)
+library(dplyr)
+library(CARBayes)
+library(ggplot2)
+library(coda)
+```
+
+
+## Lire les données
+
+```{r}
+data<- read_xlsx("covid.xlsx", sheet = "Feuil2")
+```
+
+## Lire la carte (using raster) : this will be depreciated soon enough !!!
+
+```{r}
+## télécharger la carte de l'Algérie (niveau wilayas)
+
+dz<- raster::getData("GADM", country="DZ",level=1)
+
+## quelques modifications sur la carte pour pouvoir fusionner
+dz@data$Wilaya<- dz@data$NAME_1
+dz@data$NAME_1 <- NULL
+
+## joindre les données avec la carte
+dzsf<- st_as_sf(dz)
+full<- full_join(dzsf, data, by = "Wilaya")
+fullsp<- as_Spatial(full)
+
+```
+```{r}
+dz2 <- geodata::gadm("DZ", level = 1, path = getwd())
+
+dz2$Wilaya <- dz2$NAME_1
+dz2$NAME_1 <- NULL
+
+dzsf<- st_as_sf(dz2)
+full<- full_join(dzsf, data, by = "Wilaya")
+fullsp<- as_Spatial(full)
+```
+
+
+## Voisinage spatiale
+
+### création du voisinage
+
+```{r}
+T <- poly2nb(fullsp)
+W <- nb2listw(T,style ="B" )
+W1 <- nb2mat(T, style ="B")
+```
+
+### graphique du voisinage
+
+```{r}
+plot(fullsp,border="grey60")
+plot(W,coordinates(dz), pch = 19,cex = 0.6, col = "blue", add = TRUE)
+```
+
+### Moran
+
+```{r}
+moran.test(fullsp@data$Y, listw = W)
+moran.plot(fullsp@data$Y, listw = W,pch =16, col= "black",
+           cex = .5, quiet = F,
+           label = as.character(fullsp@data$Wilaya))
+
+MC <- moran.mc(fullsp@data$Y, listw = W,nsim = 999)
+
+plot(MC)
+```
+
+### Geary
+
+```{r}
+geary.test(fullsp@data$Y,listw = W)
+geary.mc(fullsp@data$Y,listw = W,nsim=999)
+plot(geary.mc(fullsp@data$Y,listw = W,nsim=999))
+```
+
+### Analyse Moran Locale
+
+```{r}
+locmoran <- localmoran(fullsp@data$Y,listw = W)
+locmoran
+
+hist(locmoran[,5])
+
+
+lm <- as.data.frame(as.matrix(locmoran))
+
+full$locmoran1 <- lm[,1]
+
+full$zscoremoran <- abs(lm[,4])
+
+ggplot(data = full) +
+  geom_sf(aes(fill = locmoran1))+
+  scale_fill_gradient2(midpoint = 0, low = "red", mid = "white", high = "green")+
+  labs(x = "Eastings", y = "Northings", fill = "Local Moran") +
+  theme_bw() 
+
+
+
+ggplot(data = full) +
+  geom_sf(aes(fill = zscoremoran))+
+  scale_fill_gradient2(midpoint = 0, low = "red", mid = "white", high =
+                         "green")+
+  labs(x = "Eastings", y = "Northings", fill = "Locan Moran Z-score") +
+  theme_bw()
+
+
+ggplot(data = full) +
+  geom_sf(aes(fill = zscoremoran))+
+  scale_fill_gradient( low = "blue", high = "green")+
+  labs(title = "local moran",
+       fill = "Z score de Local Moran") +
+  theme_bw()
+
+tmap_mode("view")
+tm_shape(full) +
+  tm_borders(col = "#FFFFFF")+
+  tm_fill(col = "locmoran1", midpoint = NA)
+
+tm_shape(full) +
+  tm_borders(col = "black")+
+  tm_fill(col = "zscoremoran")
+
+```
+### Local Getis Ord
+
+```{r}
+locg<- localG(fullsp@data$Y,listw = W)
+lm1<-as.data.frame(as.matrix(locg))
+
+full$locg <- lm1[,1]
+
+tm_shape(full) +
+  tm_borders(col = "black")+
+  tm_fill(col = "locg")
+
+
+ggplot(data = full) +
+  geom_sf(aes(fill = locg))+
+  scale_fill_gradient2(midpoint = 0, low = "red", mid = "white", high =
+                         "green")+
+  labs(x = "Eastings", y = "Northings", fill = "Local Getis Ord") +
+  theme_bw()
+```
+
+### Moran Locan High-Low
+
+```{r}
+lmq<- attributes(locmoran)$quadr$mean
+full$lmq<- lmq
+tm_shape(full) +
+  tm_borders(col = "#FFFFFF")+
+  tm_fill(col = "lmq",palette = tmaptools::get_brewer_pal("Accent", n = 4))
+lmqme<- attributes(locmoran)$quadr$median
+full$lmq<- lmqme
+ggplot(data = full) +
+  geom_sf(aes(fill = factor(lmqme)))+
+  scale_fill_brewer(palette = "Paired")+
+  labs(x = "Eastings", y = "Northings", fill = "Moran Local") +
+  theme_bw()
+```
+
+## Analyse descreptive
+
+```{r}
+full %>%
+  ggplot(aes(x = Y)) +
+  scale_x_continuous()+
+  geom_histogram(bins = 10, fill = "blue", col = 'red') +
+  labs(x = "cas cumulés",
+       y = "Fréquence")+
+  theme_bw()
+
+
+full %>%
+  ggplot(aes(y = Y)) +
+  scale_x_continuous()+
+  geom_boxplot(fill = "blue", col = 'red') +
+  labs(x = "Cas.cumulés",
+       y = "Fréquence")+
+  theme_bw()
+
+
+full %>%
+  ggplot(aes(x = expected)) +
+  scale_x_continuous()+
+  geom_histogram(bins = 10, fill = "blue", col = 'red') +
+  labs(x = "expected",
+       y = "Fréquence")+
+  theme_bw()
+full %>%
+  ggplot(aes(y = expected)) +
+  scale_x_continuous()+
+  geom_boxplot(fill = "blue", col = 'red') +
+  labs(x = "expected",
+       y = "Fréquence")+
+  theme_bw()
+```
+
+## Modélisation
+
+### les modèles proposés
+
+```{r}
+formula<- Y ~ offset(log(expected)) + 1
+
+set.seed(09)
+modèle1 <- S.CARleroux(formula = formula, data = full, W=W1,
+                       family = "poisson",
+                       n.sample = 300000, burnin = 100000,thin = 100)
+modèle1$modelfit
+
+
+set.seed(09)
+modèle2 <- S.CARleroux(formula = formula, data = full, W=W1 , family =
+                         "poisson",
+                       n.sample = 300000, burnin = 100000,thin = 100,
+                       prior.tau2 = c(0.5,0.01), prior.nu2 = c(0.5,0.01))
+modèle2$modelfit
+
+set.seed(09)
+modèle3 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 300000, burnin = 100000, thin = 100,
+                       prior.tau2 = c(0.1,0.01), prior.nu2 = c(0.1,0.01))
+modèle3$modelfit
+
+set.seed(09)
+modèle4 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 300000, burnin = 100000,thin = 100,
+                       prior.tau2 = c(0.05,0.01), prior.nu2 = c(0.05,0.01))
+
+modèle4$modelfit
+
+set.seed(09)
+modèle5 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 300000, burnin = 100000,thin = 100,
+                       prior.tau2 = c(0.02,0.01), prior.nu2 = c(0.02,0.01))
+
+modèle5$modelfit
+
+set.seed(09)
+modèle6 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 300000, burnin = 100000,thin = 100,
+                       prior.tau2 = c(0.01,0.01), prior.nu2 = c(0.01,0.01))
+
+modèle6$modelfit
+
+set.seed(09)
+modèle7 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 300000, burnin = 100000,thin = 100,
+                       prior.tau2 = c(0.05,0.05), prior.nu2 = c(0.05,0.05))
+
+modèle7$modelfit
+
+```
+
+best modèle est le modèle 5
+
+## Graphique de trace
+
+```{r}
+best <- modèle5
+
+best$summary.results
+
+plot(best$samples$tau2)
+
+```
+### les chaines
+
+```{r}
+chaine01 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 300000, burnin = 100000,thin = 100,
+                       prior.tau2 = c(0.02,0.01), prior.nu2 = c(0.02,0.01))
+
+
+chaine02 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 300000, burnin = 100000,thin = 100,
+                       prior.tau2 = c(0.02,0.01), prior.nu2 = c(0.02,0.01))
+
+
+chaine03 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 300000, burnin = 100000,thin = 100,
+                       prior.tau2 = c(0.02,0.01), prior.nu2 = c(0.02,0.01))
+
+
+plot(chaine03$samples$tau2)
+
+tau2.samples <- mcmc.list(chaine01$samples$tau2,
+                          chaine02$samples$tau2,
+                          chaine03$samples$tau2)
+plot(tau2.samples)
+
+rho.samples <- mcmc.list(chaine01$samples$rho,
+                          chaine02$samples$rho,
+                          chaine03$samples$rho)
+plot(rho.samples)
+
+```
+
+## Analyse de convergence
+
+```{r}
+gelman.diag(mcmc.list(chaine01$samples$tau2, chaine02$samples$tau2,
+                      chaine03$samples$tau2))
+
+gelman.diag(mcmc.list(chaine01$samples$rho, chaine02$samples$rho,
+                      chaine03$samples$rho))
+
+gelman.plot(tau2.samples)
+
+gelman.plot(rho.samples)
+
+
+
+traceplot(best$samples$tau2)
+densplot(chaine01$samples$beta)
+densplot(chaine02$samples$beta)
+densplot(chaine03$samples$beta)
+
+
+densplot(modèle5$samples$beta)
+
+traceplot(chaine01$samples$tau2)
+traceplot(chaine02$samples$tau2)
+traceplot(chaine03$samples$tau2)
+plot(chaine01$samples$tau2)
+plot(chaine02$samples$tau2)
+plot(chaine03$samples$tau2)
+```
+### risque relatif
+
+```{r}
+fitted.samples.combined<- rbind(chaine01$samples$fitted,
+                                chaine02$samples$fitted,
+                                chaine03$samples$fitted)
+
+n.samples<- nrow(fitted.samples.combined)
+n.all<- ncol(fitted.samples.combined)
+risk.samples.combined<- fitted.samples.combined /
+  matrix(rep(full$expected, n.samples), nrow=n.samples, ncol=n.all,
+         byrow=TRUE)
+
+
+risk<- apply(risk.samples.combined, 2, median)
+full$risk<- risk
+
+
+tm_shape(full) +
+  tm_borders(col = "#FFFFFF")+
+  tm_fill(col = "risk")
+
+ggplot(data = full) +
+  geom_sf(aes(fill = risk))+
+  scale_fill_gradient(low = "green", high ="red")+
+  labs(x = "Eastings", y = "Northings", fill =  "Relative risk") +
+  theme_bw()
+
+
+
+## Boite à moustaches du risque
+riskdf<- data.frame(risk = risk)
+riskdf %>%
+  ggplot(aes(y = risk)) +
+  geom_boxplot(fill = "blue") +
+  theme_bw() +
+  labs(y = "risque relatif")
+
+
+```
+
+### probabilité à posteriori
+
+```{r}
+pep<- apply(risk.samples.combined> 1, 2, mean)
+full$pep<- pep
+
+tm_shape(full) +
+  tm_borders(col = "#FFFFFF")+
+  tm_fill(col = "pep")
+
+
+ggplot(data = full) +
+  geom_sf(aes(fill = pep))+
+  scale_fill_gradient(low = "blue", high ="red")+
+  labs(x = "Eastings", y = "Northings", fill = "Local Getis Ord") +
+  theme_bw()
+
+#### écart type du risque relatif
+mat<- matrix(NA, nrow = 6000, ncol = nrow(full))
+for(i in 1:nrow(full)){
+  mat[1:2000,i] <- exp(chaine01$samples$beta + chaine01$samples$phi[,i])
+}
+
+for(i in 1:nrow(full)){
+  mat[2001:4000,i] <- exp(chaine02$samples$beta + chaine02$samples$phi[,i])
+}
+
+for(i in 1:nrow(full)){
+  mat[4001:6000,i] <- exp(chaine03$samples$beta + chaine03$samples$phi[,i])
+}
+
+sdrr<- data.frame(sdrr = apply(mat, 2, sd))
+sdrr %>%
+  ggplot(aes(y = sdrr)) +
+  geom_boxplot(fill = "blue") +
+  theme_bw() +
+  labs(y = "écart type du risque relatif")                           
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+#### No thinning
+
+```{r}
+formula<- Y ~ offset(log(expected)) + 1
+
+set.seed(09)
+modèle1 <- S.CARleroux(formula = formula, data = full, W=W1,
+                       family = "poisson",
+                       n.sample = 3000, burnin = 100)
+modèle1$modelfit
+
+
+set.seed(09)
+modèle2 <- S.CARleroux(formula = formula, data = full, W=W1 , family =
+                         "poisson",
+                       n.sample = 3000, burnin = 100,
+                       prior.tau2 = c(0.5,0.01), prior.nu2 = c(0.5,0.01))
+modèle2$modelfit
+
+set.seed(09)
+modèle3 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 3000, burnin = 100,
+                       prior.tau2 = c(0.1,0.01), prior.nu2 = c(0.1,0.01))
+modèle3$modelfit
+
+set.seed(09)
+modèle4 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 3000, burnin = 100,
+                       prior.tau2 = c(0.05,0.01), prior.nu2 = c(0.05,0.01))
+
+modèle4$modelfit
+
+set.seed(09)
+modèle5 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 3000, burnin = 100,
+                       prior.tau2 = c(0.02,0.01), prior.nu2 = c(0.02,0.01))
+
+modèle5$modelfit
+
+set.seed(09)
+modèle6 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 3000, burnin = 100,
+                       prior.tau2 = c(0.01,0.01), prior.nu2 = c(0.01,0.01))
+
+modèle6$modelfit
+
+set.seed(09)
+modèle7 <- S.CARleroux(formula = formula, data = full, W=W1, family =
+                         "poisson",
+                       n.sample = 3000, burnin = 100,
+                       prior.tau2 = c(1,0.02), prior.nu2 = c(1,0.02))
+
+modèle7$modelfit
+
+
+```
+
