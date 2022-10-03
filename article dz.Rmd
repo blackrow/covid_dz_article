@@ -85,7 +85,7 @@ moran.plot(fullsp@data$Y, listw = W,pch =16, col= "black",
            label = as.character(fullsp@data$Wilaya))
 
 MC <- moran.mc(fullsp@data$Y, listw = W,nsim = 999)
-
+MC
 plot(MC)
 ```
 
